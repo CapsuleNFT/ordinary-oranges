@@ -12,7 +12,7 @@
     "build": "npm run clean && npm run compile",
     "coverage": "hardhat coverage",
     "deploy": "hardhat deploy",
-    "deploy:oo":"hardhat deploy --tags 'OrdinaryOranges'",
+    "deploy:mainnet":"hardhat deploy --network mainnet",
     "fork": "hardhat node --no-deploy",
     "generate-abi": "hardhat generate-abi",
     "postinstall": "hardhat typechain && patch-package",
