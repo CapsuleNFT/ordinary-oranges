@@ -2,39 +2,39 @@ import { ethers } from 'hardhat'
 import { expect } from 'chai'
 import { OrdinaryOranges, ICapsule } from '../typechain-types'
 import { SignerWithAddress } from '@nomiclabs/hardhat-ethers/signers'
-import { Address } from './utils'
+import { setBalance } from '@nomicfoundation/hardhat-network-helpers'
 
 describe('Ordinary Oranges tests', async function () {
   const baseURI = 'http://localhost/'
-  const deployerAddress = '0xB58992cfA9B39A2FFA0dd286248503A2eFbc65Db'
   const capsuleCollectionAddress = '0x1b41F57D52FE6dB3a63bceB4E8845c0F9F31f859'
-  let OrdinaryOranges: OrdinaryOranges, capsuleMinter
-  let capsule
-  let oldCollectionOwner: SignerWithAddress, governor: SignerWithAddress, user1: SignerWithAddress, user2: SignerWithAddress
+  const oldWrapper = '0xde2aA3A3422B64e31e0d39fbe8d9095F386B1089'
 
-  let capsuleCollectionTax, mintFee, governorMintFee, maxUsdcAmount
+  let OrdinaryOranges: OrdinaryOranges
+  let capsule: ICapsule
+  let oldCollectionOwner: SignerWithAddress,
+    governor: SignerWithAddress,
+    user1: SignerWithAddress,
+    user2: SignerWithAddress
+
+  let mintFee, governorMintFee
 
   before(async function () {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;[governor, user1, user2] = await ethers.getSigners()
 
-    oldCollectionOwner = await ethers.getImpersonatedSigner(deployerAddress)
-    
-    // Note setting owner address here so that later we don't have to call connect for owner
+    oldCollectionOwner = await ethers.getImpersonatedSigner(oldWrapper)
+    await setBalance(oldWrapper, ethers.utils.parseEther('10'))
+
     const factory = await ethers.getContractFactory('OrdinaryOranges', governor)
     OrdinaryOranges = (await factory.deploy(capsuleCollectionAddress)) as OrdinaryOranges
 
-    const OOCapsuleCollection = await ethers.getContractAt('ICapsule', capsuleCollectionAddress)
-    await OOCapsuleCollection.connect(oldCollectionOwner).transferOwnership(OrdinaryOranges.address)
-    await OOCapsuleCollection.connect(oldCollectionOwner).updateTokenURIOwner(OrdinaryOranges.address)
+    capsule = (await ethers.getContractAt('ICapsule', capsuleCollectionAddress)) as ICapsule
+    await capsule.connect(oldCollectionOwner).transferOwnership(OrdinaryOranges.address)
+    await capsule.connect(oldCollectionOwner).updateTokenURIOwner(OrdinaryOranges.address)
+    await OrdinaryOranges.connect(governor).claimCollectionBurnerRole()
   })
 
   beforeEach(async function () {
-    const collection = await OrdinaryOranges.capsuleCollection()
-    expect(collection).to.properAddress
-    capsule = await ethers.getContractAt('ICapsule', collection)
-
-    capsuleMinter = await ethers.getContractAt('ICapsuleMinter', await OrdinaryOranges.CAPSULE_MINTER())
     governorMintFee = await ethers.utils.parseEther('0.001')
     mintFee = await ethers.utils.parseEther('1')
 
@@ -88,14 +88,18 @@ describe('Ordinary Oranges tests', async function () {
 
     it('Should fail governorMint if not governor', async function () {
       // When governor minting OO
-      const tx = OrdinaryOranges.connect(user1).governorMint({ value: governorMintFee })
+      const tx = OrdinaryOranges.connect(user1).governorMint({
+        value: governorMintFee,
+      })
       // Then revert with 'not-governor'
       await expect(tx).to.revertedWith('not-governor')
     })
 
     it('Should governorMint OO', async function () {
       // When governor minting OO
-      const tx = OrdinaryOranges.connect(governor).governorMint({ value: governorMintFee })
+      const tx = OrdinaryOranges.connect(governor).governorMint({
+        value: governorMintFee,
+      })
       // Then verify event is emitted with proper args
       await expect(tx).to.emit(OrdinaryOranges, 'OrdinaryOrangeMinted').withArgs(governor.address)
     })
@@ -139,6 +143,33 @@ describe('Ordinary Oranges tests', async function () {
     })
   })
 
+  context('Sweep', function () {
+    it('Should sweep eth out of contract', async function () {
+      // given
+      await OrdinaryOranges.connect(user1).mint({ value: mintFee })
+      expect(await ethers.provider.getBalance(OrdinaryOranges.address)).gt(0)
+      const balanceBefore = await ethers.provider.getBalance(governor.address)
+      // when
+      await OrdinaryOranges.connect(governor).sweep(ethers.constants.AddressZero)
+      // then
+      expect(await ethers.provider.getBalance(OrdinaryOranges.address)).eq(0)
+      const balanceAfter = await ethers.provider.getBalance(governor.address)
+      expect(balanceAfter).gt(balanceBefore)
+    })
+  })
+
+  context('Lock collection', function () {
+    it('Should lock collection at 256 count aka 255 id', async function () {
+      expect(await capsule.maxId()).eq(ethers.constants.MaxUint256)
+      await OrdinaryOranges.lockCollectionCount()
+      expect(await capsule.maxId()).eq(255)
+    })
+
+    it('Should fail when non-governor call lock', async function () {
+      const tx = OrdinaryOranges.connect(user2).lockCollectionCount()
+      await expect(tx).to.revertedWith('not governor')
+    })
+  })
   context('Transfer collection ownership', function () {
     it('Should revert if non governor user call transfer ownership', async function () {
       const tx = OrdinaryOranges.connect(user1).transferCollectionOwnership(user2.address)
